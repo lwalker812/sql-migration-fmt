@@ -1,0 +1,15 @@
+[project]
+name = "sql-migration-fmt"
+version = "0.1.0"
+description = "Validating parser and pretty printer for CREATE TABLE migrations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "lwalker812" }]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["migfmt"]
