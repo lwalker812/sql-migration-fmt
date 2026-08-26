@@ -1,9 +1,8 @@
-"""Tokenizer, AST, and recursive-descent parser for CREATE TABLE statements.
+"""Tokenizer, AST, and recursive-descent parser for CREATE TABLE and
+ALTER TABLE statements.
 
-Only CREATE TABLE is understood right now. ALTER TABLE, CREATE INDEX, and the
-rest of the DDL surface show up constantly in real migration folders, but
-CREATE TABLE is where the awkward parsing cases concentrate (quoting styles,
-default expressions, composite keys), so it comes first.
+CREATE INDEX, DROP TABLE, and the rest of the DDL surface are still rejected
+with an "unsupported statement" error rather than silently mis-parsed.
 """
 
 from dataclasses import dataclass, field
@@ -97,6 +96,35 @@ class CreateTable:
     if_not_exists: bool
     columns: list[ColumnDef]
     table_constraints: list[object]
+    line: int
+
+
+@dataclass
+class AddColumn:
+    column: ColumnDef
+
+
+@dataclass
+class DropColumn:
+    name: str
+    if_exists: bool = False
+
+
+@dataclass
+class RenameColumn:
+    old_name: str
+    new_name: str
+
+
+@dataclass
+class RenameTable:
+    new_name: str
+
+
+@dataclass
+class AlterTable:
+    name: str
+    actions: list[object]
     line: int
 
 
@@ -265,23 +293,29 @@ class Parser:
             return tok.text
         raise ParseError(f"expected identifier, found {tok.text!r}", tok.line, tok.col)
 
-    def parse_statements(self) -> list[CreateTable]:
+    def parse_statements(self) -> list[object]:
         statements = []
         while self.peek().kind != "eof":
             if self.peek().kind == "punct" and self.peek().text == ";":
                 self.advance()
                 continue
-            statements.append(self.parse_create_table())
+            statements.append(self.parse_statement())
         return statements
+
+    def parse_statement(self) -> object:
+        tok = self.peek()
+        if tok.kind == "ident" and tok.text.upper() == "CREATE":
+            return self.parse_create_table()
+        if tok.kind == "ident" and tok.text.upper() == "ALTER":
+            return self.parse_alter_table()
+        raise ParseError(
+            f"unsupported statement: expected CREATE TABLE or ALTER TABLE, found {tok.text!r}",
+            tok.line,
+            tok.col,
+        )
 
     def parse_create_table(self) -> CreateTable:
         tok = self.peek()
-        if not (tok.kind == "ident" and tok.text.upper() == "CREATE"):
-            raise ParseError(
-                f"unsupported statement: expected CREATE TABLE, found {tok.text!r}",
-                tok.line,
-                tok.col,
-            )
         self.advance()
         tok2 = self.peek()
         if not (tok2.kind == "ident" and tok2.text.upper() == "TABLE"):
@@ -323,6 +357,58 @@ class Parser:
             columns=columns,
             table_constraints=table_constraints,
             line=tok.line,
+        )
+
+    def parse_alter_table(self) -> AlterTable:
+        tok = self.peek()
+        self.advance()
+        self.expect_kw("TABLE")
+        name = self.expect_ident()
+
+        actions: list[object] = []
+        while True:
+            actions.append(self.parse_alter_action())
+            nxt = self.peek()
+            if nxt.kind == "punct" and nxt.text == ",":
+                self.advance()
+                continue
+            break
+
+        self.expect_punct(";")
+        return AlterTable(name=name, actions=actions, line=tok.line)
+
+    def parse_alter_action(self):
+        if self.check_kw("ADD"):
+            self.advance()
+            if self.check_kw("COLUMN"):
+                self.advance()
+            return AddColumn(column=self.parse_column_def())
+
+        if self.check_kw("DROP"):
+            self.advance()
+            if self.check_kw("COLUMN"):
+                self.advance()
+            if_exists = False
+            if self.check_kw("IF"):
+                self.advance()
+                self.expect_kw("EXISTS")
+                if_exists = True
+            return DropColumn(name=self.expect_ident(), if_exists=if_exists)
+
+        if self.check_kw("RENAME"):
+            self.advance()
+            if self.check_kw("TO"):
+                self.advance()
+                return RenameTable(new_name=self.expect_ident())
+            if self.check_kw("COLUMN"):
+                self.advance()
+            old_name = self.expect_ident()
+            self.expect_kw("TO")
+            return RenameColumn(old_name=old_name, new_name=self.expect_ident())
+
+        tok = self.peek()
+        raise ParseError(
+            f"unsupported ALTER TABLE action, found {tok.text!r}", tok.line, tok.col
         )
 
     def is_table_constraint_start(self) -> bool:
@@ -488,9 +574,54 @@ def validate_create_table(stmt: CreateTable) -> None:
                 )
 
 
-def parse_sql(sql: str) -> list[CreateTable]:
+def validate_alter_table(stmt: AlterTable) -> None:
+    added: dict[str, ColumnDef] = {}
+    touched: dict[str, object] = {}
+    for action in stmt.actions:
+        if isinstance(action, AddColumn):
+            key = action.column.name.lower()
+            if key in added:
+                raise ValidationError(
+                    f"column {action.column.name!r} added twice in the same "
+                    f"ALTER TABLE {stmt.name!r}",
+                    action.column.line,
+                )
+            added[key] = action.column
+        elif isinstance(action, DropColumn):
+            key = action.name.lower()
+            if key in touched:
+                raise ValidationError(
+                    f"column {action.name!r} is targeted by more than one "
+                    f"action in ALTER TABLE {stmt.name!r}",
+                    stmt.line,
+                )
+            touched[key] = action
+        elif isinstance(action, RenameColumn):
+            if action.old_name.lower() == action.new_name.lower():
+                raise ValidationError(
+                    f"column {action.old_name!r} renamed to itself in "
+                    f"ALTER TABLE {stmt.name!r}",
+                    stmt.line,
+                )
+            key = action.old_name.lower()
+            if key in touched:
+                raise ValidationError(
+                    f"column {action.old_name!r} is targeted by more than one "
+                    f"action in ALTER TABLE {stmt.name!r}",
+                    stmt.line,
+                )
+            touched[key] = action
+        elif isinstance(action, RenameTable):
+            if action.new_name.lower() == stmt.name.lower():
+                raise ValidationError(f"table {stmt.name!r} renamed to itself", stmt.line)
+
+
+def parse_sql(sql: str) -> list[object]:
     tokens = tokenize(sql)
     statements = Parser(tokens, sql).parse_statements()
     for stmt in statements:
-        validate_create_table(stmt)
+        if isinstance(stmt, CreateTable):
+            validate_create_table(stmt)
+        elif isinstance(stmt, AlterTable):
+            validate_alter_table(stmt)
     return statements

@@ -9,13 +9,18 @@ any one team's existing style.
 import re
 
 from .parser import (
+    AddColumn,
+    AlterTable,
     ColumnDef,
     CreateTable,
     DefaultConstraint,
+    DropColumn,
     NotNullConstraint,
     NullConstraint,
     PrimaryKeyConstraint,
     ReferencesConstraint,
+    RenameColumn,
+    RenameTable,
     TableForeignKey,
     TablePrimaryKey,
     TableUnique,
@@ -85,7 +90,7 @@ def _format_table_constraint(constraint) -> str:
     raise TypeError(f"unknown table constraint: {constraint!r}")
 
 
-def pretty_print(stmt: CreateTable) -> str:
+def _pretty_print_create_table(stmt: CreateTable) -> str:
     header = "CREATE TABLE "
     if stmt.if_not_exists:
         header += "IF NOT EXISTS "
@@ -95,6 +100,39 @@ def pretty_print(stmt: CreateTable) -> str:
     lines.extend(_format_table_constraint(tc) for tc in stmt.table_constraints)
     body = ",\n".join(f"    {line}" for line in lines)
     return f"{header}\n{body}\n);"
+
+
+def _format_alter_action(action) -> str:
+    if isinstance(action, AddColumn):
+        return f"ADD COLUMN {_format_column_def(action.column)}"
+    if isinstance(action, DropColumn):
+        if_exists = "IF EXISTS " if action.if_exists else ""
+        return f"DROP COLUMN {if_exists}{format_identifier(action.name)}"
+    if isinstance(action, RenameColumn):
+        return (
+            f"RENAME COLUMN {format_identifier(action.old_name)} "
+            f"TO {format_identifier(action.new_name)}"
+        )
+    if isinstance(action, RenameTable):
+        return f"RENAME TO {format_identifier(action.new_name)}"
+    raise TypeError(f"unknown alter action: {action!r}")
+
+
+def _pretty_print_alter_table(stmt: AlterTable) -> str:
+    header = f"ALTER TABLE {format_identifier(stmt.name)}"
+    actions = [_format_alter_action(a) for a in stmt.actions]
+    if len(actions) == 1:
+        return f"{header} {actions[0]};"
+    body = ",\n".join(f"    {action}" for action in actions)
+    return f"{header}\n{body};"
+
+
+def pretty_print(stmt) -> str:
+    if isinstance(stmt, CreateTable):
+        return _pretty_print_create_table(stmt)
+    if isinstance(stmt, AlterTable):
+        return _pretty_print_alter_table(stmt)
+    raise TypeError(f"unknown statement type: {stmt!r}")
 
 
 def pretty_print_all(statements) -> str:

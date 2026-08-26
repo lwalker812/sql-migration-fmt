@@ -60,6 +60,34 @@ VALID_CASES = [
         "a block comment between statements",
         "CREATE TABLE t (id INTEGER PRIMARY KEY); /* done */",
     ),
+    (
+        "alter table add column",
+        "ALTER TABLE t ADD COLUMN nickname TEXT;",
+    ),
+    (
+        "alter table add without the COLUMN keyword",
+        "ALTER TABLE t ADD nickname TEXT;",
+    ),
+    (
+        "alter table drop column if exists",
+        "ALTER TABLE t DROP COLUMN IF EXISTS nickname;",
+    ),
+    (
+        "alter table rename column",
+        "ALTER TABLE t RENAME COLUMN old_name TO new_name;",
+    ),
+    (
+        "alter table rename without the COLUMN keyword",
+        "ALTER TABLE t RENAME old_name TO new_name;",
+    ),
+    (
+        "alter table rename to",
+        "ALTER TABLE t RENAME TO renamed_t;",
+    ),
+    (
+        "alter table with more than one action",
+        "ALTER TABLE t ADD COLUMN a TEXT, DROP COLUMN b, RENAME COLUMN c TO d;",
+    ),
 ]
 
 # (name, sql, exception type)
@@ -111,12 +139,37 @@ INVALID_CASES = [
     ),
     (
         "unsupported statement kind",
-        "ALTER TABLE t ADD COLUMN x INTEGER;",
+        "DROP TABLE t;",
         ParseError,
     ),
     (
         "unsupported create statement",
         "CREATE INDEX idx ON t (id);",
+        ParseError,
+    ),
+    (
+        "alter table renames a column to itself",
+        "ALTER TABLE t RENAME COLUMN a TO a;",
+        ValidationError,
+    ),
+    (
+        "alter table renames itself",
+        "ALTER TABLE t RENAME TO t;",
+        ValidationError,
+    ),
+    (
+        "alter table adds the same column twice",
+        "ALTER TABLE t ADD COLUMN a TEXT, ADD COLUMN a INTEGER;",
+        ValidationError,
+    ),
+    (
+        "alter table drops the same column twice",
+        "ALTER TABLE t DROP COLUMN a, DROP COLUMN a;",
+        ValidationError,
+    ),
+    (
+        "alter table missing an action",
+        "ALTER TABLE t;",
         ParseError,
     ),
 ]
@@ -155,6 +208,16 @@ class ValidCaseTests(unittest.TestCase):
         sql = 'CREATE TABLE "UserAccounts" (id INTEGER PRIMARY KEY);'
         out = pretty_print(parse_sql(sql)[0])
         self.assertIn('"UserAccounts"', out)
+
+    def test_exact_output_for_a_single_alter_action(self):
+        sql = "alter table t add nickname text;"
+        expected = "ALTER TABLE t ADD COLUMN nickname TEXT;"
+        self.assertEqual(pretty_print(parse_sql(sql)[0]), expected)
+
+    def test_exact_output_for_multiple_alter_actions(self):
+        sql = "ALTER TABLE t ADD COLUMN a TEXT, DROP COLUMN b;"
+        expected = "ALTER TABLE t\n    ADD COLUMN a TEXT,\n    DROP COLUMN b;"
+        self.assertEqual(pretty_print(parse_sql(sql)[0]), expected)
 
 
 class InvalidCaseTests(unittest.TestCase):

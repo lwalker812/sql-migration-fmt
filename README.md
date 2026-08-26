@@ -74,9 +74,14 @@ On top of syntax, `parse_sql` validates:
   column or as a separate table constraint
 - table-level constraints only reference columns that actually exist
 
-Anything outside `CREATE TABLE` — `ALTER TABLE`, `CREATE INDEX`, `DROP
-TABLE`, and so on — is rejected with a clear "unsupported statement" error
-rather than silently mis-parsed.
+`ALTER TABLE` is also understood, for `ADD [COLUMN]`, `DROP [COLUMN] [IF
+EXISTS]`, `RENAME [COLUMN] ... TO ...`, and `RENAME TO ...`, including
+several comma-separated actions in one statement. It's checked for the same
+class of mistake: a column added twice in one statement, a column targeted
+by more than one action, and a rename to the name it already has.
+
+Anything else — `CREATE INDEX`, `DROP TABLE`, and so on — is rejected with a
+clear "unsupported statement" error rather than silently mis-parsed.
 
 ## Running the tests
 
@@ -90,4 +95,4 @@ list of invalid inputs paired with the error type they should raise.
 
 ## Status
 
-Early. Only `CREATE TABLE` is supported so far.
+Early. `CREATE TABLE` and `ALTER TABLE` are supported so far.
