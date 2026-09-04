@@ -88,6 +88,26 @@ VALID_CASES = [
         "alter table with more than one action",
         "ALTER TABLE t ADD COLUMN a TEXT, DROP COLUMN b, RENAME COLUMN c TO d;",
     ),
+    (
+        "create index",
+        "CREATE INDEX idx_orders_customer ON orders (customer_id);",
+    ),
+    (
+        "create unique index on multiple columns",
+        "CREATE UNIQUE INDEX idx_orders_no ON orders (customer_id, order_no);",
+    ),
+    (
+        "create index if not exists",
+        "CREATE INDEX IF NOT EXISTS idx_t_a ON t (a);",
+    ),
+    (
+        "drop table",
+        "DROP TABLE t;",
+    ),
+    (
+        "drop table if exists",
+        "DROP TABLE IF EXISTS t;",
+    ),
 ]
 
 # (name, sql, exception type)
@@ -139,13 +159,18 @@ INVALID_CASES = [
     ),
     (
         "unsupported statement kind",
-        "DROP TABLE t;",
+        "TRUNCATE TABLE t;",
         ParseError,
     ),
     (
         "unsupported create statement",
-        "CREATE INDEX idx ON t (id);",
+        "CREATE VIEW v AS SELECT 1;",
         ParseError,
+    ),
+    (
+        "duplicate column in an index",
+        "CREATE INDEX idx_t_a ON t (a, a);",
+        ValidationError,
     ),
     (
         "alter table renames a column to itself",
@@ -219,6 +244,16 @@ class ValidCaseTests(unittest.TestCase):
         expected = "ALTER TABLE t\n    ADD COLUMN a TEXT,\n    DROP COLUMN b;"
         self.assertEqual(pretty_print(parse_sql(sql)[0]), expected)
 
+    def test_exact_output_for_create_unique_index(self):
+        sql = "create unique index idx_t_a on t (a, b);"
+        expected = "CREATE UNIQUE INDEX idx_t_a ON t (a, b);"
+        self.assertEqual(pretty_print(parse_sql(sql)[0]), expected)
+
+    def test_exact_output_for_drop_table_if_exists(self):
+        sql = "drop table if exists t;"
+        expected = "DROP TABLE IF EXISTS t;"
+        self.assertEqual(pretty_print(parse_sql(sql)[0]), expected)
+
 
 class InvalidCaseTests(unittest.TestCase):
     def test_rejected_with_the_right_error_type(self):
@@ -234,7 +269,7 @@ class InvalidCaseTests(unittest.TestCase):
 
     def test_unsupported_statement_message_is_informative(self):
         with self.assertRaises(ParseError) as ctx:
-            parse_sql("DROP TABLE t;")
+            parse_sql("TRUNCATE TABLE t;")
         self.assertIn("unsupported statement", str(ctx.exception))
 
 

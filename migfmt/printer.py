@@ -12,9 +12,11 @@ from .parser import (
     AddColumn,
     AlterTable,
     ColumnDef,
+    CreateIndex,
     CreateTable,
     DefaultConstraint,
     DropColumn,
+    DropTable,
     NotNullConstraint,
     NullConstraint,
     PrimaryKeyConstraint,
@@ -127,11 +129,34 @@ def _pretty_print_alter_table(stmt: AlterTable) -> str:
     return f"{header}\n{body};"
 
 
+def _pretty_print_create_index(stmt: CreateIndex) -> str:
+    header = "CREATE "
+    if stmt.unique:
+        header += "UNIQUE "
+    header += "INDEX "
+    if stmt.if_not_exists:
+        header += "IF NOT EXISTS "
+    cols = ", ".join(format_identifier(c) for c in stmt.columns)
+    header += (
+        f"{format_identifier(stmt.name)} ON {format_identifier(stmt.table)} ({cols})"
+    )
+    return f"{header};"
+
+
+def _pretty_print_drop_table(stmt: DropTable) -> str:
+    if_exists = "IF EXISTS " if stmt.if_exists else ""
+    return f"DROP TABLE {if_exists}{format_identifier(stmt.name)};"
+
+
 def pretty_print(stmt) -> str:
     if isinstance(stmt, CreateTable):
         return _pretty_print_create_table(stmt)
     if isinstance(stmt, AlterTable):
         return _pretty_print_alter_table(stmt)
+    if isinstance(stmt, CreateIndex):
+        return _pretty_print_create_index(stmt)
+    if isinstance(stmt, DropTable):
+        return _pretty_print_drop_table(stmt)
     raise TypeError(f"unknown statement type: {stmt!r}")
 
 

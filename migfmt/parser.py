@@ -1,8 +1,8 @@
-"""Tokenizer, AST, and recursive-descent parser for CREATE TABLE and
-ALTER TABLE statements.
+"""Tokenizer, AST, and recursive-descent parser for CREATE TABLE, ALTER
+TABLE, CREATE INDEX, and DROP TABLE statements.
 
-CREATE INDEX, DROP TABLE, and the rest of the DDL surface are still rejected
-with an "unsupported statement" error rather than silently mis-parsed.
+The rest of the DDL surface is still rejected with an "unsupported
+statement" error rather than silently mis-parsed.
 """
 
 from dataclasses import dataclass, field
@@ -125,6 +125,23 @@ class RenameTable:
 class AlterTable:
     name: str
     actions: list[object]
+    line: int
+
+
+@dataclass
+class CreateIndex:
+    name: str
+    table: str
+    columns: list[str]
+    unique: bool
+    if_not_exists: bool
+    line: int
+
+
+@dataclass
+class DropTable:
+    name: str
+    if_exists: bool
     line: int
 
 
@@ -305,27 +322,44 @@ class Parser:
     def parse_statement(self) -> object:
         tok = self.peek()
         if tok.kind == "ident" and tok.text.upper() == "CREATE":
-            return self.parse_create_table()
+            return self.parse_create()
         if tok.kind == "ident" and tok.text.upper() == "ALTER":
             return self.parse_alter_table()
+        if tok.kind == "ident" and tok.text.upper() == "DROP":
+            return self.parse_drop_table()
         raise ParseError(
-            f"unsupported statement: expected CREATE TABLE or ALTER TABLE, found {tok.text!r}",
+            "unsupported statement: expected CREATE TABLE, CREATE INDEX, "
+            f"ALTER TABLE, or DROP TABLE, found {tok.text!r}",
             tok.line,
             tok.col,
         )
 
-    def parse_create_table(self) -> CreateTable:
+    def parse_create(self) -> object:
         tok = self.peek()
         self.advance()
-        tok2 = self.peek()
-        if not (tok2.kind == "ident" and tok2.text.upper() == "TABLE"):
-            raise ParseError(
-                f"unsupported statement: CREATE {tok2.text} (only CREATE TABLE is supported)",
-                tok2.line,
-                tok2.col,
-            )
-        self.advance()
 
+        if self.check_kw("TABLE"):
+            self.advance()
+            return self.parse_create_table_body(tok)
+
+        unique = False
+        if self.check_kw("UNIQUE"):
+            self.advance()
+            unique = True
+
+        if self.check_kw("INDEX"):
+            self.advance()
+            return self.parse_create_index_body(tok, unique)
+
+        tok2 = self.peek()
+        raise ParseError(
+            f"unsupported statement: CREATE {tok2.text} "
+            "(only CREATE TABLE and CREATE INDEX are supported)",
+            tok2.line,
+            tok2.col,
+        )
+
+    def parse_create_table_body(self, tok: Token) -> CreateTable:
         if_not_exists = False
         if self.check_kw("IF"):
             self.advance()
@@ -358,6 +392,43 @@ class Parser:
             table_constraints=table_constraints,
             line=tok.line,
         )
+
+    def parse_create_index_body(self, tok: Token, unique: bool) -> CreateIndex:
+        if_not_exists = False
+        if self.check_kw("IF"):
+            self.advance()
+            self.expect_kw("NOT")
+            self.expect_kw("EXISTS")
+            if_not_exists = True
+
+        name = self.expect_ident()
+        self.expect_kw("ON")
+        table = self.expect_ident()
+        columns = self.parse_column_list()
+        self.expect_punct(";")
+        return CreateIndex(
+            name=name,
+            table=table,
+            columns=columns,
+            unique=unique,
+            if_not_exists=if_not_exists,
+            line=tok.line,
+        )
+
+    def parse_drop_table(self) -> DropTable:
+        tok = self.peek()
+        self.advance()
+        self.expect_kw("TABLE")
+
+        if_exists = False
+        if self.check_kw("IF"):
+            self.advance()
+            self.expect_kw("EXISTS")
+            if_exists = True
+
+        name = self.expect_ident()
+        self.expect_punct(";")
+        return DropTable(name=name, if_exists=if_exists, line=tok.line)
 
     def parse_alter_table(self) -> AlterTable:
         tok = self.peek()
@@ -616,6 +687,17 @@ def validate_alter_table(stmt: AlterTable) -> None:
                 raise ValidationError(f"table {stmt.name!r} renamed to itself", stmt.line)
 
 
+def validate_create_index(stmt: CreateIndex) -> None:
+    seen: set[str] = set()
+    for column in stmt.columns:
+        key = column.lower()
+        if key in seen:
+            raise ValidationError(
+                f"duplicate column {column!r} in index {stmt.name!r}", stmt.line
+            )
+        seen.add(key)
+
+
 def parse_sql(sql: str) -> list[object]:
     tokens = tokenize(sql)
     statements = Parser(tokens, sql).parse_statements()
@@ -624,4 +706,6 @@ def parse_sql(sql: str) -> list[object]:
             validate_create_table(stmt)
         elif isinstance(stmt, AlterTable):
             validate_alter_table(stmt)
+        elif isinstance(stmt, CreateIndex):
+            validate_create_index(stmt)
     return statements
